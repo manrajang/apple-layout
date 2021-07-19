@@ -1,0 +1,20 @@
+.section-container {
+  position: relative;
+}
+
+.sticky-element {
+  display: none;
+  position: fixed;
+  left: 0;
+  width: 100%;
+}
+
+.sticky-canvas {
+  display: none;
+  position: fixed;
+}
+
+.blend-canvas.sticky {
+  position: fixed;
+  top: 0;
+}
