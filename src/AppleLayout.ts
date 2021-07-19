@@ -15,8 +15,8 @@ export const BlendAnimation = {
 } as const;
 type BlendAnimation = typeof BlendAnimation[keyof typeof BlendAnimation];
 type AnimationBlendImage = {
-  imageHeight: number;
   imagePathList: string[];
+  end: number;
   inAnimationType?: BlendAnimation;
   outAnimationType?: BlendAnimation;
   inRatio?: number;
@@ -57,7 +57,7 @@ export default class AppleLayout {
   private yOffset = -1;
   private sceneList: LocalScene[] = [];
   private blendCanvasYPos = -1;
-  private blendImageList: HTMLImageElement[] = [];
+  private blendImageMap: { [key: string]: HTMLImageElement } = {};
 
   constructor(public container: HTMLDivElement, sceneList: Scene[]) {
     this.sceneList = sceneList.map((scene) => {
@@ -89,10 +89,14 @@ export default class AppleLayout {
       this.prevHeight += this.sceneList[i].scrollHeight;
     }
 
-    if (this.yOffset > this.prevHeight + this.sceneList[this.currentScene].scrollHeight) {
+    const currentHeight = this.prevHeight + this.sceneList[this.currentScene].scrollHeight;
+    if (this.yOffset > currentHeight - window.innerHeight) {
+      this.preRenderBlendImage(this.currentScene + 1);
+    }
+
+    if (this.yOffset > currentHeight) {
       this.currentScene++;
       this.blendCanvasYPos = -1;
-      this.blendImageList = [];
       this.showCurrentStikcyElement();
       return;
     }
@@ -104,7 +108,6 @@ export default class AppleLayout {
 
       this.currentScene--;
       this.blendCanvasYPos = -1;
-      this.blendImageList = [];
       this.showCurrentStikcyElement();
       return;
     }
@@ -132,40 +135,64 @@ export default class AppleLayout {
     return widthRatio <= heigthRaito ? heigthRaito : widthRatio;
   }
 
-  private renderBlendFirstImage(
-    el: HTMLCanvasElement,
-    image: HTMLImageElement,
-    leftX?: number,
-    rightX?: number,
-    width?: number,
-  ): void {
-    el.style.transform = `scale(${this.canvasFitRatio(el)})`;
-    const context = el.getContext('2d');
-    if (!context) {
-      return;
-    }
-
-    context.drawImage(image, 0, 0);
-
-    if (leftX !== undefined && rightX !== undefined && width !== undefined) {
-      context.clearRect(leftX, 0, width, el.height);
-      context.clearRect(rightX, 0, width, el.height);
+  private loadBlendImage(path: string, callback: () => void): void {
+    if (!this.blendImageMap[path]) {
+      const image = new Image();
+      image.src = path;
+      image.onload = () => {
+        this.blendImageMap[path] = image;
+        callback();
+      };
     }
   }
 
-  private renderBlendSecondImage(el: HTMLCanvasElement, image: HTMLImageElement, blendHeight: number): void {
-    const { width: canvasWidth, height: canvasHeight } = el;
-    el.getContext('2d')?.drawImage(
-      image,
-      0,
-      canvasHeight - blendHeight,
-      canvasWidth,
-      blendHeight,
-      0,
-      canvasHeight - blendHeight,
-      canvasWidth,
-      blendHeight,
-    );
+  private preRenderBlendImage(sceneIndex: number): void {
+    const scene = this.sceneList[sceneIndex];
+    if (!scene) {
+      return;
+    }
+
+    const { selector, animationList } = scene;
+    const sectionEl = document.querySelector<HTMLElement>(selector);
+    if (!sectionEl || !animationList) {
+      return;
+    }
+
+    animationList?.forEach(({ selector, blendImage }) => {
+      const el = sectionEl.querySelector<HTMLElement>(selector);
+      if (!(el instanceof HTMLCanvasElement) || !blendImage) {
+        return;
+      }
+
+      const { imagePathList, inAnimationType, inRatio } = blendImage;
+      this.loadBlendImage(imagePathList[0], () => {
+        this.preRenderBlendImage(sceneIndex);
+      });
+
+      if (!this.blendImageMap[imagePathList[0]]) {
+        return;
+      }
+
+      const fitRatio = this.canvasFitRatio(el);
+      el.getContext('2d')?.drawImage(this.blendImageMap[imagePathList[0]], 0, 0);
+
+      if (inAnimationType === BlendAnimation.ResizeSide) {
+        const { width: canvasWidth, height: canvasHeight } = el;
+        const fitWidth = document.body.offsetWidth / fitRatio;
+        const rectWidth = fitWidth * (inRatio || 0);
+        const leftX = (canvasWidth - fitWidth) / 2;
+        el.style.transform = `scale(${fitRatio})`;
+        el.getContext('2d')?.clearRect(leftX, 0, rectWidth, canvasHeight);
+        el.getContext('2d')?.clearRect(leftX + fitWidth - rectWidth, 0, rectWidth, canvasHeight);
+      } else if (!inAnimationType) {
+        el.style.transform = `scale(${fitRatio})`;
+      }
+    });
+  }
+
+  private resizeAnimation(el: HTMLCanvasElement, leftX: number, rightX: number, rectWidth = 0): void {
+    el.getContext('2d')?.clearRect(leftX, 0, rectWidth, el.height);
+    el.getContext('2d')?.clearRect(rightX, 0, rectWidth, el.height);
   }
 
   private setCanvasStyle(el: HTMLCanvasElement, imageHeight: number): void {
@@ -176,7 +203,7 @@ export default class AppleLayout {
 
   public resetLayout(sceneList: Scene[]): void {
     this.blendCanvasYPos = -1;
-    this.blendImageList = [];
+    this.blendImageMap = {};
     this.sceneList = sceneList.map(({ type, selector, heightMultiple, animationList }) => {
       const sectionEl = document.querySelector<HTMLElement>(selector);
       if (!sectionEl) {
@@ -201,7 +228,7 @@ export default class AppleLayout {
         sectionEl.style.height = `${scrollHeight}px`;
       }
 
-      animationList?.forEach(({ selector, videoImage, blendImage }) => {
+      animationList?.forEach(({ selector, videoImage }) => {
         const el = sectionEl.querySelector<HTMLElement>(selector);
         if (!(el instanceof HTMLCanvasElement)) {
           return;
@@ -210,30 +237,9 @@ export default class AppleLayout {
         if (videoImage) {
           this.setCanvasStyle(el, videoImage.imageHeight);
         }
-
-        if (blendImage) {
-          const { imagePathList, inAnimationType, inRatio } = blendImage;
-          let rectLeftX: number;
-          let rectRightX: number;
-          let rectWidth: number;
-
-          if (inAnimationType === BlendAnimation.ResizeSide) {
-            const fitWidth = document.body.offsetWidth / this.canvasFitRatio(el);
-            rectWidth = fitWidth * (inRatio || 0);
-            rectLeftX = (el.width - fitWidth) / 2;
-            rectRightX = rectLeftX + fitWidth - rectWidth;
-          }
-
-          const image = new Image();
-          image.src = imagePathList[0];
-          image.onload = () => {
-            this.renderBlendFirstImage(el, image, rectLeftX, rectRightX, rectWidth);
-          };
-        }
       });
     });
     this.yOffset = window.pageYOffset;
-
     let totalHeight = 0;
     for (let i = 0; i < this.sceneList.length; i++) {
       totalHeight += this.sceneList[i].scrollHeight;
@@ -320,61 +326,115 @@ export default class AppleLayout {
 
   private blendAnimation(blendImage: AnimationBlendImage, scrollRatio: number, el: HTMLCanvasElement): void {
     const { scrollHeight } = this.sceneList[this.currentScene];
-    const { imagePathList, inAnimationType, inRatio, outAnimationType, outRatio } = blendImage;
+    const { imagePathList, end: animationEnd, inAnimationType, inRatio, outAnimationType, outRatio } = blendImage;
     const { offsetTop, width: canvasWidth, height: canvasHeight } = el;
     const fitRatio = this.canvasFitRatio(el);
 
-    if (this.blendImageList.length === 0) {
-      const firstImage = new Image();
-      firstImage.src = imagePathList[0];
-      const secondImage = new Image();
-      secondImage.src = imagePathList[1];
+    if (this.blendCanvasYPos === -1) {
       this.blendCanvasYPos = offsetTop + (canvasHeight - canvasHeight * fitRatio) / 2;
-      this.blendImageList = [firstImage, secondImage];
     }
 
-    let end = this.blendCanvasYPos / scrollHeight;
-    let rectLeftX;
-    let rectRightX;
-    let rectWidth;
+    this.loadBlendImage(imagePathList[0], () => {
+      this.playAnimation();
+    });
+    this.loadBlendImage(imagePathList[1], () => {
+      this.playAnimation();
+    });
 
-    if (inAnimationType === BlendAnimation.ResizeSide) {
+    let completeLoadedImage = true;
+    imagePathList.forEach((path) => {
+      if (!this.blendImageMap[path]) {
+        completeLoadedImage = false;
+      }
+    });
+
+    if (!completeLoadedImage) {
+      return;
+    }
+
+    el.getContext('2d')?.drawImage(this.blendImageMap[imagePathList[0]], 0, 0);
+    const animationStart = this.blendCanvasYPos / scrollHeight;
+    const diff = animationEnd - animationStart;
+    const interval = outAnimationType ? diff / 2 : diff;
+
+    if (inAnimationType) {
       let start = (this.blendCanvasYPos - window.innerHeight / 2) / scrollHeight;
       start = start >= 0 ? start : 0;
-      const fitWidth = document.body.offsetWidth / fitRatio;
-      rectWidth = fitWidth * (inRatio || 0);
-      let from = (canvasWidth - fitWidth) / 2;
-      rectLeftX = this.ratioValue({ from, to: from - rectWidth, start, end });
-      from = from + fitWidth - rectWidth;
-      rectRightX = this.ratioValue({ from, to: from + rectWidth, start, end });
+      const end = animationStart;
+
+      if (inAnimationType === BlendAnimation.ResizeSide) {
+        const fitWidth = document.body.offsetWidth / fitRatio;
+        const rectWidth = fitWidth * (inRatio || 0);
+        const leftFrom = (canvasWidth - fitWidth) / 2;
+        const rightFrom = leftFrom + fitWidth - rectWidth;
+        this.resizeAnimation(
+          el,
+          this.ratioValue({ from: leftFrom, to: leftFrom - rectWidth, start, end }),
+          this.ratioValue({ from: rightFrom, to: rightFrom + rectWidth, start, end }),
+          rectWidth,
+        );
+        el.style.transform = `scale(${fitRatio})`;
+      } else if (outAnimationType === BlendAnimation.Scale) {
+        el.style.transform = `scale(${this.ratioValue({
+          from: el.getBoundingClientRect().width / el.width,
+          to: fitRatio,
+          start,
+          end,
+        })})`;
+      }
+    } else {
+      el.style.transform = `scale(${fitRatio})`;
     }
 
-    this.renderBlendFirstImage(el, this.blendImageList[0], rectLeftX, rectRightX, rectWidth);
-
-    if (scrollRatio < end) {
+    let nextAnimationStart = animationStart;
+    if (scrollRatio < nextAnimationStart) {
       el.classList.remove('sticky');
     } else {
-      const start = end;
-      end = end + 0.2;
-      this.renderBlendSecondImage(
-        el,
-        this.blendImageList[1],
-        this.ratioValue({ from: 0, to: canvasHeight, start, end }),
+      const end = nextAnimationStart + interval;
+      const blendHeight = this.ratioValue({ from: 0, to: canvasHeight, start: nextAnimationStart, end });
+      el.getContext('2d')?.drawImage(
+        this.blendImageMap[imagePathList[1]],
+        0,
+        canvasHeight - blendHeight,
+        canvasWidth,
+        blendHeight,
+        0,
+        canvasHeight - blendHeight,
+        canvasWidth,
+        blendHeight,
       );
       el.classList.add('sticky');
       el.style.top = `${-(canvasHeight - canvasHeight * fitRatio) / 2}px`;
-    }
-
-    if (scrollRatio > end) {
-      const start = end;
-      end = end + 0.2;
-      el.style.transform = `scale(${this.ratioValue({ from: fitRatio, to: outRatio || 1, start, end })})`;
       el.style.marginTop = '0';
+      nextAnimationStart = end;
     }
 
-    if (scrollRatio > end && 0 < end) {
+    if (scrollRatio > nextAnimationStart && outAnimationType) {
+      const start = nextAnimationStart;
+      const end = nextAnimationStart + interval;
+
+      if (outAnimationType === BlendAnimation.ResizeSide) {
+        const fitWidth = document.body.offsetWidth / fitRatio;
+        const rectWidth = fitWidth * (outRatio || 0);
+        const leftTo = (canvasWidth - fitWidth) / 2;
+        const rightTo = leftTo + fitWidth - rectWidth;
+        this.resizeAnimation(
+          el,
+          this.ratioValue({ from: leftTo - rectWidth, to: leftTo, start, end }),
+          this.ratioValue({ from: rightTo + rectWidth, to: rightTo, start, end }),
+          rectWidth,
+        );
+      } else if (outAnimationType === BlendAnimation.Scale) {
+        el.style.transform = `scale(${this.ratioValue({ from: fitRatio, to: outRatio || 1, start, end })})`;
+      }
+
+      el.style.marginTop = '0';
+      nextAnimationStart = end;
+    }
+
+    if (scrollRatio > nextAnimationStart && 0 < nextAnimationStart) {
       el.classList.remove('sticky');
-      el.style.marginTop = `${scrollHeight * 0.4}px`;
+      el.style.marginTop = `${scrollHeight * diff}px`;
     }
   }
 
