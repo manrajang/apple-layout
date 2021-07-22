@@ -11,7 +11,7 @@ type AnimationVideoImage = Animation & {
 };
 export const BlendAnimation = {
   Scale: 'scale',
-  ResizeSide: 'resizeSide',
+  CropSide: 'cropSide',
 } as const;
 type BlendAnimation = typeof BlendAnimation[keyof typeof BlendAnimation];
 type AnimationBlendImage = {
@@ -52,12 +52,16 @@ export type Scene = {
 type LocalScene = Scene & { scrollHeight: number };
 
 export default class AppleLayout {
-  private currentScene = 0;
-  private prevHeight = 0;
-  private yOffset = -1;
-  private sceneList: LocalScene[] = [];
   private blendCanvasYPos = -1;
-  private blendImageMap: { [key: string]: HTMLImageElement } = {};
+  private blendImageList: { path: string; image: HTMLImageElement }[] = [];
+  private currentScene = 0;
+  private currentYOffset = 0;
+  private prevImageIndex = -1;
+  private prevScene = 0;
+  private prevScrollHeight = 0;
+  private prevYOffset = 0;
+  private rafVideoId = -1;
+  private sceneList: LocalScene[] = [];
 
   constructor(public container: HTMLDivElement, sceneList: Scene[]) {
     this.sceneList = sceneList.map((scene) => {
@@ -82,33 +86,37 @@ export default class AppleLayout {
   }
 
   private handleScroll(): void {
-    this.yOffset = window.pageYOffset;
-    this.prevHeight = 0;
+    this.prevYOffset = this.currentYOffset;
+    this.prevScene = this.currentScene;
+    this.currentYOffset = window.pageYOffset;
 
+    this.prevScrollHeight = 0;
     for (let i = 0; i < this.currentScene; i++) {
-      this.prevHeight += this.sceneList[i].scrollHeight;
+      this.prevScrollHeight += this.sceneList[i].scrollHeight;
     }
 
-    const currentHeight = this.prevHeight + this.sceneList[this.currentScene].scrollHeight;
-    if (this.yOffset > currentHeight - window.innerHeight) {
+    const currentScrollHeight = this.prevScrollHeight + this.sceneList[this.currentScene].scrollHeight;
+    if (this.currentYOffset > currentScrollHeight - window.innerHeight) {
       this.preRenderBlendImage(this.currentScene + 1);
     }
 
-    if (this.yOffset > currentHeight) {
-      this.currentScene++;
+    if (this.currentYOffset > currentScrollHeight) {
       this.blendCanvasYPos = -1;
-      this.showCurrentStikcyElement();
+      this.currentScene++;
+      this.prevImageIndex = -1;
+      this.showStikcyElement();
       return;
     }
 
-    if (this.yOffset < this.prevHeight) {
+    if (this.currentYOffset < this.prevScrollHeight) {
       if (this.currentScene === 0) {
         return;
       }
 
-      this.currentScene--;
       this.blendCanvasYPos = -1;
-      this.showCurrentStikcyElement();
+      this.currentScene--;
+      this.prevImageIndex = -1;
+      this.showStikcyElement();
       return;
     }
 
@@ -119,14 +127,6 @@ export default class AppleLayout {
     this.resetLayout(this.sceneList);
   }
 
-  private renderImage(el: HTMLCanvasElement, path: string): void {
-    const image = new Image();
-    image.src = path;
-    image.onload = () => {
-      el.getContext('2d')?.drawImage(image, 0, 0);
-    };
-  }
-
   private canvasFitRatio(el: HTMLCanvasElement): number {
     const { innerWidth: windowWidth, innerHeight: windowHeight } = window;
     const { width: canvasWidth, height: canvasHeight } = el;
@@ -135,13 +135,16 @@ export default class AppleLayout {
     return widthRatio <= heigthRaito ? heigthRaito : widthRatio;
   }
 
-  private loadBlendImage(path: string, callback: () => void): void {
-    if (!this.blendImageMap[path]) {
+  private loadBlendImage(path: string, afterLoad: () => void): void {
+    const findImage = this.blendImageList.find(({ path: _path }) => {
+      return _path === path;
+    });
+    if (!findImage) {
       const image = new Image();
       image.src = path;
       image.onload = () => {
-        this.blendImageMap[path] = image;
-        callback();
+        this.blendImageList.push({ path, image });
+        afterLoad();
       };
     }
   }
@@ -159,8 +162,7 @@ export default class AppleLayout {
     }
 
     animationList?.forEach(({ selector, blendImage }) => {
-      const el = sectionEl.querySelector<HTMLElement>(selector);
-      if (!(el instanceof HTMLCanvasElement) || !blendImage) {
+      if (!blendImage) {
         return;
       }
 
@@ -169,14 +171,22 @@ export default class AppleLayout {
         this.preRenderBlendImage(sceneIndex);
       });
 
-      if (!this.blendImageMap[imagePathList[0]]) {
+      const findImage = this.blendImageList.find(({ path }) => {
+        return path === imagePathList[0];
+      });
+      if (!findImage) {
         return;
       }
 
-      const fitRatio = this.canvasFitRatio(el);
-      el.getContext('2d')?.drawImage(this.blendImageMap[imagePathList[0]], 0, 0);
+      const el = sectionEl.querySelector<HTMLCanvasElement>(selector);
+      if (!el) {
+        return;
+      }
 
-      if (inAnimationType === BlendAnimation.ResizeSide) {
+      el.getContext('2d')?.drawImage(findImage.image, 0, 0);
+
+      const fitRatio = this.canvasFitRatio(el);
+      if (inAnimationType === BlendAnimation.CropSide) {
         const { width: canvasWidth, height: canvasHeight } = el;
         const fitWidth = document.body.offsetWidth / fitRatio;
         const rectWidth = fitWidth * (inRatio || 0);
@@ -190,11 +200,6 @@ export default class AppleLayout {
     });
   }
 
-  private resizeAnimation(el: HTMLCanvasElement, leftX: number, rightX: number, rectWidth = 0): void {
-    el.getContext('2d')?.clearRect(leftX, 0, rectWidth, el.height);
-    el.getContext('2d')?.clearRect(rightX, 0, rectWidth, el.height);
-  }
-
   private setCanvasStyle(el: HTMLCanvasElement, imageHeight: number): void {
     el.style.left = '50%';
     el.style.top = '50%';
@@ -203,7 +208,10 @@ export default class AppleLayout {
 
   public resetLayout(sceneList: Scene[]): void {
     this.blendCanvasYPos = -1;
-    this.blendImageMap = {};
+    this.blendImageList = [];
+    this.currentYOffset = window.pageYOffset;
+    this.prevImageIndex = -1;
+    this.prevYOffset = 0;
     this.sceneList = sceneList.map(({ type, selector, heightMultiple, animationList }) => {
       const sectionEl = document.querySelector<HTMLElement>(selector);
       if (!sectionEl) {
@@ -218,7 +226,7 @@ export default class AppleLayout {
         scrollHeight: type === 'sticky' ? heightMultiple * window.innerHeight : sectionEl.offsetHeight,
       };
     });
-    this.sceneList.forEach(({ type, selector, animationList, scrollHeight }) => {
+    this.sceneList.forEach(({ type, selector, scrollHeight, animationList }) => {
       const sectionEl = document.querySelector<HTMLElement>(selector);
       if (!sectionEl) {
         return;
@@ -229,8 +237,8 @@ export default class AppleLayout {
       }
 
       animationList?.forEach(({ selector, videoImage }) => {
-        const el = sectionEl.querySelector<HTMLElement>(selector);
-        if (!(el instanceof HTMLCanvasElement)) {
+        const el = sectionEl.querySelector<HTMLCanvasElement>(selector);
+        if (!el) {
           return;
         }
 
@@ -239,21 +247,25 @@ export default class AppleLayout {
         }
       });
     });
-    this.yOffset = window.pageYOffset;
+
     let totalHeight = 0;
     for (let i = 0; i < this.sceneList.length; i++) {
       totalHeight += this.sceneList[i].scrollHeight;
 
-      if (totalHeight >= this.yOffset) {
+      if (totalHeight >= this.currentYOffset) {
         this.currentScene = i;
         break;
       }
     }
 
-    this.showCurrentStikcyElement();
+    this.showStikcyElement();
+
+    if (this.currentYOffset === 0) {
+      this.playAnimation();
+    }
   }
 
-  private showCurrentStikcyElement(): void {
+  private showStikcyElement(): void {
     this.sceneList.forEach(({ selector }, index) => {
       const el = document.querySelector<HTMLElement>(selector);
       if (!el) {
@@ -264,30 +276,68 @@ export default class AppleLayout {
       el.querySelectorAll<HTMLElement>('.sticky-element').forEach((el) => {
         el.style.display = display;
       });
-      el.querySelectorAll<HTMLElement>('.sticky-canvas').forEach((el) => {
+      el.querySelectorAll<HTMLCanvasElement>('.sticky-canvas').forEach((el) => {
+        const { width, height } = el;
         el.style.display = display;
+        el.getContext('2d')?.clearRect(0, 0, width, height);
       });
     });
   }
 
   public playAnimation(): void {
-    const partYOffset = this.yOffset - this.prevHeight;
     const { selector, animationList, scrollHeight } = this.sceneList[this.currentScene];
     const sectionEl = document.querySelector<HTMLElement>(selector);
-    const scrollRatio = partYOffset / scrollHeight;
+    const scrollRatio = (this.currentYOffset - this.prevScrollHeight) / scrollHeight;
     animationList?.forEach(({ selector, videoImage, blendImage, opacity, ...transform }) => {
       const el = sectionEl?.querySelector<HTMLElement>(selector);
       if (!el) {
         return;
       }
 
-      if (videoImage && el instanceof HTMLCanvasElement) {
-        const { imagePathList, ...animation } = videoImage;
-        this.renderImage(el, imagePathList[Math.round(this.ratioValue(animation))]);
-      }
+      if (el instanceof HTMLCanvasElement) {
+        if (videoImage) {
+          const { imagePathList, ...animation } = videoImage;
+          const toYOffset = this.currentYOffset;
+          const scene = this.prevScene;
+          let fromYOffset = this.prevYOffset;
+          const videoAnimation = () => {
+            let prevScrollHeight = 0;
+            for (let i = 0; i < scene; i++) {
+              prevScrollHeight += this.sceneList[i].scrollHeight;
+            }
 
-      if (blendImage && el instanceof HTMLCanvasElement) {
-        this.blendAnimation(blendImage, scrollRatio, el);
+            fromYOffset = fromYOffset + (toYOffset - fromYOffset) * 0.2;
+            const imageIndex = Math.round(this.ratioValue(animation, fromYOffset - prevScrollHeight));
+            if (imageIndex !== this.prevImageIndex) {
+              const image = new Image();
+              image.src = imagePathList[imageIndex];
+              image.onload = () => {
+                el.getContext('2d')?.drawImage(image, 0, 0);
+              };
+            }
+
+            this.prevImageIndex = imageIndex;
+            this.rafVideoId = requestAnimationFrame(videoAnimation);
+
+            if (Math.abs(toYOffset - fromYOffset) < 1) {
+              cancelAnimationFrame(this.rafVideoId);
+              this.rafVideoId = -1;
+            }
+          };
+
+          if (this.rafVideoId !== -1) {
+            cancelAnimationFrame(this.rafVideoId);
+            this.rafVideoId = -1;
+          }
+
+          if (this.rafVideoId === -1) {
+            this.rafVideoId = requestAnimationFrame(videoAnimation);
+          }
+        }
+
+        if (blendImage) {
+          this.blendAnimation(blendImage, scrollRatio, el);
+        }
       }
 
       if (opacity) {
@@ -325,15 +375,7 @@ export default class AppleLayout {
   }
 
   private blendAnimation(blendImage: AnimationBlendImage, scrollRatio: number, el: HTMLCanvasElement): void {
-    const { scrollHeight } = this.sceneList[this.currentScene];
     const { imagePathList, end: animationEnd, inAnimationType, inRatio, outAnimationType, outRatio } = blendImage;
-    const { offsetTop, width: canvasWidth, height: canvasHeight } = el;
-    const fitRatio = this.canvasFitRatio(el);
-
-    if (this.blendCanvasYPos === -1) {
-      this.blendCanvasYPos = offsetTop + (canvasHeight - canvasHeight * fitRatio) / 2;
-    }
-
     this.loadBlendImage(imagePathList[0], () => {
       this.playAnimation();
     });
@@ -341,18 +383,27 @@ export default class AppleLayout {
       this.playAnimation();
     });
 
-    let completeLoadedImage = true;
-    imagePathList.forEach((path) => {
-      if (!this.blendImageMap[path]) {
-        completeLoadedImage = false;
-      }
+    const firstImage = this.blendImageList.find(({ path }) => {
+      return path === imagePathList[0];
+    });
+    const secondImage = this.blendImageList.find(({ path }) => {
+      return path === imagePathList[1];
     });
 
-    if (!completeLoadedImage) {
+    if (!firstImage || !secondImage) {
       return;
     }
 
-    el.getContext('2d')?.drawImage(this.blendImageMap[imagePathList[0]], 0, 0);
+    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
+    const { scrollHeight } = this.sceneList[this.currentScene];
+    const { offsetTop, width: canvasWidth, height: canvasHeight } = el;
+    const fitRatio = this.canvasFitRatio(el);
+
+    if (this.blendCanvasYPos === -1) {
+      this.blendCanvasYPos = offsetTop + (canvasHeight - canvasHeight * fitRatio) / 2;
+    }
+
+    el.getContext('2d')?.drawImage(firstImage.image, 0, 0);
     const animationStart = this.blendCanvasYPos / scrollHeight;
     const diff = animationEnd - animationStart;
     const interval = outAnimationType ? diff / 2 : diff;
@@ -362,25 +413,34 @@ export default class AppleLayout {
       start = start >= 0 ? start : 0;
       const end = animationStart;
 
-      if (inAnimationType === BlendAnimation.ResizeSide) {
+      if (inAnimationType === BlendAnimation.CropSide) {
         const fitWidth = document.body.offsetWidth / fitRatio;
         const rectWidth = fitWidth * (inRatio || 0);
         const leftFrom = (canvasWidth - fitWidth) / 2;
         const rightFrom = leftFrom + fitWidth - rectWidth;
-        this.resizeAnimation(
-          el,
-          this.ratioValue({ from: leftFrom, to: leftFrom - rectWidth, start, end }),
-          this.ratioValue({ from: rightFrom, to: rightFrom + rectWidth, start, end }),
+        el.getContext('2d')?.clearRect(
+          this.ratioValue({ from: leftFrom, to: leftFrom - rectWidth, start, end }, sceneYOffset),
+          0,
           rectWidth,
+          canvasHeight,
+        );
+        el.getContext('2d')?.clearRect(
+          this.ratioValue({ from: rightFrom, to: rightFrom + rectWidth, start, end }, sceneYOffset),
+          0,
+          rectWidth,
+          canvasHeight,
         );
         el.style.transform = `scale(${fitRatio})`;
       } else if (outAnimationType === BlendAnimation.Scale) {
-        el.style.transform = `scale(${this.ratioValue({
-          from: el.getBoundingClientRect().width / el.width,
-          to: fitRatio,
-          start,
-          end,
-        })})`;
+        el.style.transform = `scale(${this.ratioValue(
+          {
+            from: el.getBoundingClientRect().width / el.width,
+            to: fitRatio,
+            start,
+            end,
+          },
+          sceneYOffset,
+        )})`;
       }
     } else {
       el.style.transform = `scale(${fitRatio})`;
@@ -390,10 +450,13 @@ export default class AppleLayout {
     if (scrollRatio < nextAnimationStart) {
       el.classList.remove('sticky');
     } else {
+      el.classList.add('sticky');
+      el.style.top = `${-(canvasHeight - canvasHeight * fitRatio) / 2}px`;
+      el.style.marginTop = '0';
       const end = nextAnimationStart + interval;
-      const blendHeight = this.ratioValue({ from: 0, to: canvasHeight, start: nextAnimationStart, end });
+      const blendHeight = this.ratioValue({ from: 0, to: canvasHeight, start: nextAnimationStart, end }, sceneYOffset);
       el.getContext('2d')?.drawImage(
-        this.blendImageMap[imagePathList[1]],
+        secondImage.image,
         0,
         canvasHeight - blendHeight,
         canvasWidth,
@@ -403,9 +466,6 @@ export default class AppleLayout {
         canvasWidth,
         blendHeight,
       );
-      el.classList.add('sticky');
-      el.style.top = `${-(canvasHeight - canvasHeight * fitRatio) / 2}px`;
-      el.style.marginTop = '0';
       nextAnimationStart = end;
     }
 
@@ -413,19 +473,28 @@ export default class AppleLayout {
       const start = nextAnimationStart;
       const end = nextAnimationStart + interval;
 
-      if (outAnimationType === BlendAnimation.ResizeSide) {
+      if (outAnimationType === BlendAnimation.CropSide) {
         const fitWidth = document.body.offsetWidth / fitRatio;
         const rectWidth = fitWidth * (outRatio || 0);
         const leftTo = (canvasWidth - fitWidth) / 2;
         const rightTo = leftTo + fitWidth - rectWidth;
-        this.resizeAnimation(
-          el,
-          this.ratioValue({ from: leftTo - rectWidth, to: leftTo, start, end }),
-          this.ratioValue({ from: rightTo + rectWidth, to: rightTo, start, end }),
+        el.getContext('2d')?.clearRect(
+          this.ratioValue({ from: leftTo - rectWidth, to: leftTo, start, end }, sceneYOffset),
+          0,
           rectWidth,
+          canvasHeight,
+        );
+        el.getContext('2d')?.clearRect(
+          this.ratioValue({ from: rightTo + rectWidth, to: rightTo, start, end }, sceneYOffset),
+          0,
+          rectWidth,
+          canvasHeight,
         );
       } else if (outAnimationType === BlendAnimation.Scale) {
-        el.style.transform = `scale(${this.ratioValue({ from: fitRatio, to: outRatio || 1, start, end })})`;
+        el.style.transform = `scale(${this.ratioValue(
+          { from: fitRatio, to: outRatio || 1, start, end },
+          sceneYOffset,
+        )})`;
       }
 
       el.style.marginTop = '0';
@@ -439,15 +508,16 @@ export default class AppleLayout {
   }
 
   private opacityAnimation({ in: inAnimation, out: outAnimation }: AnimationInOut, scrollRatio: number): string {
+    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
     const oneAnimation = inAnimation || outAnimation;
     if (inAnimation && outAnimation) {
       if (scrollRatio <= (inAnimation.end + outAnimation.start) / 2) {
-        return `${this.ratioValue(inAnimation)}`;
+        return `${this.ratioValue(inAnimation, sceneYOffset)}`;
       } else {
-        return `${this.ratioValue(outAnimation)}`;
+        return `${this.ratioValue(outAnimation, sceneYOffset)}`;
       }
     } else if (oneAnimation) {
-      return `${this.ratioValue(oneAnimation)}`;
+      return `${this.ratioValue(oneAnimation, sceneYOffset)}`;
     }
 
     return '';
@@ -458,15 +528,16 @@ export default class AppleLayout {
     scrollRatio: number,
     animationType: string,
   ): string {
+    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
     const oneAnimation = inAnimation || outAnimation;
     if (inAnimation && outAnimation) {
       if (scrollRatio <= (inAnimation.end + outAnimation.start) / 2) {
-        return `${this.transformValue(animationType, this.ratioValue(inAnimation), inAnimation.unit)}`;
+        return `${this.transformValue(animationType, this.ratioValue(inAnimation, sceneYOffset), inAnimation.unit)}`;
       } else {
-        return `${this.transformValue(animationType, this.ratioValue(outAnimation), outAnimation.unit)}`;
+        return `${this.transformValue(animationType, this.ratioValue(outAnimation, sceneYOffset), outAnimation.unit)}`;
       }
     } else if (oneAnimation) {
-      return `${this.transformValue(animationType, this.ratioValue(oneAnimation), oneAnimation.unit)}`;
+      return `${this.transformValue(animationType, this.ratioValue(oneAnimation, sceneYOffset), oneAnimation.unit)}`;
     }
 
     return '';
@@ -482,16 +553,15 @@ export default class AppleLayout {
     return `${style}(${value})`;
   }
 
-  private ratioValue({ from, to, start, end }: Animation): number {
+  private ratioValue({ from, to, start, end }: Animation, sceneYOffset: number): number {
     const { scrollHeight } = this.sceneList[this.currentScene];
     const partStart = start * scrollHeight;
     const partEnd = end * scrollHeight;
     const partHeight = partEnd - partStart;
-    const partYOffset = this.yOffset - this.prevHeight;
 
-    if (partYOffset >= partStart && partYOffset <= partEnd) {
-      return ((partYOffset - partStart) / partHeight) * (to - from) + from;
-    } else if (partYOffset < partStart) {
+    if (sceneYOffset >= partStart && sceneYOffset <= partEnd) {
+      return ((sceneYOffset - partStart) / partHeight) * (to - from) + from;
+    } else if (sceneYOffset < partStart) {
       return from;
     }
 

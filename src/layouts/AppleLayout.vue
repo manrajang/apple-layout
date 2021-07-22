@@ -21,7 +21,6 @@ export default Vue.extend({
     sceneList: {
       handler: function (newSceneList: Scene[]): void {
         this.appleLayout?.resetLayout(newSceneList);
-        this.appleLayout?.playAnimation();
       },
       deep: true,
     },
