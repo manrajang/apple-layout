@@ -110,10 +110,15 @@ export default class AppleLayout {
     }
 
     if (this.currentYOffset > currentScrollHeight) {
+      if (this.currentScene < this.sceneList.length - 1) {
+        this.currentScene++;
+        this.showStickyElement();
+      } else {
+        this.showStickyElement(false);
+      }
+
       this.blendCanvasYPos = -1;
-      this.currentScene++;
       this.prevImageIndex = -1;
-      this.showStikcyElement();
       return;
     }
 
@@ -122,10 +127,10 @@ export default class AppleLayout {
         return;
       }
 
-      this.blendCanvasYPos = -1;
       this.currentScene--;
+      this.blendCanvasYPos = -1;
       this.prevImageIndex = -1;
-      this.showStikcyElement();
+      this.showStickyElement();
       return;
     }
 
@@ -364,21 +369,21 @@ export default class AppleLayout {
       }
     }
 
-    this.showStikcyElement();
+    this.showStickyElement();
 
     if (this.currentYOffset === 0) {
       this.playAnimation();
     }
   }
 
-  private showStikcyElement(): void {
+  private showStickyElement(show = true): void {
     this.sceneList.forEach(({ selector }, index) => {
       const el = document.querySelector<HTMLElement>(selector);
       if (!el) {
         return;
       }
 
-      const display = index === this.currentScene ? 'block' : 'none';
+      const display = show ? (index === this.currentScene ? 'block' : 'none') : 'none';
       el.querySelectorAll<HTMLElement>('.sticky-element').forEach((el) => {
         el.style.display = display;
       });
@@ -388,6 +393,7 @@ export default class AppleLayout {
         el.getContext('2d')?.clearRect(0, 0, width, height);
       });
       el.querySelectorAll<HTMLCanvasElement>('.blend-canvas').forEach((el) => {
+        el.style.marginTop = '0';
         el.classList.remove('sticky');
       });
     });
