@@ -62,6 +62,8 @@ export default class AppleLayout {
   private prevYOffset = 0;
   private rafVideoId = -1;
   private sceneList: LocalScene[] = [];
+  private videoImageInfo: { selector: string; loaded: boolean; imageList: HTMLImageElement[] }[] = [];
+  private windowWidth = 0;
 
   constructor(public container: HTMLDivElement, sceneList: Scene[]) {
     this.sceneList = sceneList.map((scene) => {
@@ -69,7 +71,10 @@ export default class AppleLayout {
     });
 
     this.handleScroll = this.handleScroll.bind(this);
+    this.handlScrollTop = this.handlScrollTop.bind(this);
     this.handleResize = this.handleResize.bind(this);
+    this.handleOrientationChange = this.handleOrientationChange.bind(this);
+    this.handleBeforeUnload = this.handleBeforeUnload.bind(this);
 
     this.initEvents();
     this.resetLayout(sceneList);
@@ -78,11 +83,15 @@ export default class AppleLayout {
   public initEvents(): void {
     window.addEventListener('scroll', this.handleScroll);
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('orientationchange', this.handleOrientationChange);
+    window.addEventListener('beforeunload', this.handleBeforeUnload);
   }
 
   public destoryEvents(): void {
     window.removeEventListener('scroll', this.handleScroll);
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('orientationchange', this.handleOrientationChange);
+    window.removeEventListener('beforeunload', this.handleBeforeUnload);
   }
 
   private handleScroll(): void {
@@ -123,8 +132,35 @@ export default class AppleLayout {
     this.playAnimation();
   }
 
-  private handleResize(): void {
+  private handlScrollTop(): void {
     this.resetLayout(this.sceneList);
+  }
+
+  private handleResize(): void {
+    if (this.windowWidth !== window.innerWidth) {
+      scrollTo(0, 0);
+      window.addEventListener('scroll', this.handlScrollTop, { once: true });
+    }
+  }
+
+  private handleOrientationChange(): void {
+    setTimeout(() => {
+      scrollTo(0, 0);
+      window.addEventListener('scroll', this.handlScrollTop);
+    }, 500);
+  }
+
+  private handleBeforeUnload(): void {
+    let prevScrollHeight = 0;
+    for (let i = 0; i < this.currentScene; i++) {
+      prevScrollHeight += this.sceneList[i].scrollHeight;
+    }
+
+    if (this.currentYOffset > 0) {
+      scrollTo(0, prevScrollHeight + 5);
+    } else {
+      scrollTo(0, 0);
+    }
   }
 
   private canvasFitRatio(el: HTMLCanvasElement): number {
@@ -133,6 +169,72 @@ export default class AppleLayout {
     const widthRatio = windowWidth / canvasWidth;
     const heigthRaito = windowHeight / canvasHeight;
     return widthRatio <= heigthRaito ? heigthRaito : widthRatio;
+  }
+
+  private loadEmptyVideoImages(selector: string, imagePathList: string[]): void {
+    if (imagePathList.length === 0) {
+      return;
+    }
+
+    const findImageInfo = this.videoImageInfo.find(({ selector: _selector }) => {
+      return _selector === selector;
+    });
+    if (!findImageInfo) {
+      this.videoImageInfo.push({
+        selector,
+        loaded: false,
+        imageList: imagePathList.map(() => {
+          return new Image();
+        }),
+      });
+    }
+  }
+
+  private async loadVideoImagesInRestScene(): Promise<void> {
+    this.sceneList.forEach(({ animationList }) => {
+      animationList?.forEach(({ selector, videoImage }) => {
+        if (videoImage) {
+          const findImageInfo = this.videoImageInfo.find(({ selector: _selector }) => {
+            return _selector === selector;
+          });
+          if (!findImageInfo) {
+            return;
+          }
+
+          const { imagePathList } = videoImage;
+          if (!findImageInfo.loaded) {
+            findImageInfo.loaded = true;
+            findImageInfo.imageList.forEach((image, index) => {
+              image.src = imagePathList[index];
+            });
+          }
+        }
+      });
+    });
+  }
+
+  private async loadVideoImagesInCurrentScene(
+    selector: string,
+    imagePathList: string[],
+    el: HTMLCanvasElement,
+    drawIndex: number,
+  ): Promise<void> {
+    const findImageInfo = this.videoImageInfo.find(({ selector: _selector }) => {
+      return _selector === selector;
+    });
+    if (!findImageInfo) {
+      return;
+    }
+
+    findImageInfo.loaded = true;
+    findImageInfo.imageList.forEach((image, index) => {
+      image.src = imagePathList[index];
+      if (index === drawIndex) {
+        image.onload = () => {
+          el.getContext('2d')?.drawImage(image, 0, 0);
+        };
+      }
+    });
   }
 
   private loadBlendImage(path: string, afterLoad: () => void): void {
@@ -211,7 +313,9 @@ export default class AppleLayout {
     this.blendImageList = [];
     this.currentYOffset = window.pageYOffset;
     this.prevImageIndex = -1;
+    this.prevScene = 0;
     this.prevYOffset = 0;
+    this.windowWidth = window.innerWidth;
     this.sceneList = sceneList.map(({ type, selector, heightMultiple, animationList }) => {
       const sectionEl = document.querySelector<HTMLElement>(selector);
       if (!sectionEl) {
@@ -243,7 +347,9 @@ export default class AppleLayout {
         }
 
         if (videoImage) {
-          this.setCanvasStyle(el, videoImage.imageHeight);
+          const { imageHeight, imagePathList } = videoImage;
+          this.setCanvasStyle(el, imageHeight);
+          this.loadEmptyVideoImages(selector, imagePathList);
         }
       });
     });
@@ -281,6 +387,9 @@ export default class AppleLayout {
         el.style.display = display;
         el.getContext('2d')?.clearRect(0, 0, width, height);
       });
+      el.querySelectorAll<HTMLCanvasElement>('.blend-canvas').forEach((el) => {
+        el.classList.remove('sticky');
+      });
     });
   }
 
@@ -293,51 +402,63 @@ export default class AppleLayout {
       if (!el) {
         return;
       }
-
       if (el instanceof HTMLCanvasElement) {
         if (videoImage) {
-          const { imagePathList, ...animation } = videoImage;
-          const toYOffset = this.currentYOffset;
-          const scene = this.prevScene;
-          let fromYOffset = this.prevYOffset;
-          const videoAnimation = () => {
-            let prevScrollHeight = 0;
-            for (let i = 0; i < scene; i++) {
-              prevScrollHeight += this.sceneList[i].scrollHeight;
+          const findImageInfo = this.videoImageInfo.find(({ selector: _selector }) => {
+            return _selector === selector;
+          });
+          if (findImageInfo) {
+            const { imagePathList, ...animation } = videoImage;
+
+            if (!findImageInfo.loaded) {
+              this.loadVideoImagesInCurrentScene(
+                selector,
+                imagePathList,
+                el,
+                Math.round(this.ratioValue(animation, this.currentYOffset - this.prevScrollHeight)),
+              );
             }
 
-            fromYOffset = fromYOffset + (toYOffset - fromYOffset) * 0.2;
-            const imageIndex = Math.round(this.ratioValue(animation, fromYOffset - prevScrollHeight));
-            if (imageIndex !== this.prevImageIndex) {
-              const image = new Image();
-              image.src = imagePathList[imageIndex];
-              image.onload = () => {
-                el.getContext('2d')?.drawImage(image, 0, 0);
-              };
-            }
+            let fromYOffset = this.prevYOffset;
+            const toYOffset = this.currentYOffset;
+            const scene = this.prevScene;
+            const videoAnimation = () => {
+              let prevScrollHeight = 0;
+              for (let i = 0; i < scene; i++) {
+                prevScrollHeight += this.sceneList[i].scrollHeight;
+              }
 
-            this.prevImageIndex = imageIndex;
-            this.rafVideoId = requestAnimationFrame(videoAnimation);
+              fromYOffset = fromYOffset + (toYOffset - fromYOffset) * 0.2;
+              const imageIndex = Math.round(this.ratioValue(animation, fromYOffset - prevScrollHeight));
+              if (imageIndex !== this.prevImageIndex) {
+                el.getContext('2d')?.drawImage(findImageInfo.imageList[imageIndex], 0, 0);
+              }
 
-            if (Math.abs(toYOffset - fromYOffset) < 1) {
+              this.prevImageIndex = imageIndex;
+              this.rafVideoId = requestAnimationFrame(videoAnimation);
+
+              if (Math.abs(toYOffset - fromYOffset) < 1) {
+                cancelAnimationFrame(this.rafVideoId);
+                this.rafVideoId = -1;
+              }
+            };
+
+            if (this.rafVideoId !== -1) {
               cancelAnimationFrame(this.rafVideoId);
               this.rafVideoId = -1;
             }
-          };
 
-          if (this.rafVideoId !== -1) {
-            cancelAnimationFrame(this.rafVideoId);
-            this.rafVideoId = -1;
-          }
-
-          if (this.rafVideoId === -1) {
-            this.rafVideoId = requestAnimationFrame(videoAnimation);
+            if (this.rafVideoId === -1) {
+              this.rafVideoId = requestAnimationFrame(videoAnimation);
+            }
           }
         }
 
         if (blendImage) {
           this.blendAnimation(blendImage, scrollRatio, el);
         }
+
+        this.loadVideoImagesInRestScene();
       }
 
       if (opacity) {
