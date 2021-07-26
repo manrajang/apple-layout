@@ -14,7 +14,13 @@
   position: fixed;
 }
 
-.blend-canvas.sticky {
-  position: fixed;
-  top: 0;
+.blend-canvas {
+  position: relative;
+  left: 50%;
+  transform-origin: top;
+
+  &.sticky {
+    position: fixed;
+    top: 0;
+  }
 }
