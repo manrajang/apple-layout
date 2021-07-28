@@ -6,7 +6,8 @@
 
 <script lang="ts">
 import Vue from 'vue';
-import AppleLayout, { Scene } from '@/AppleLayout';
+import AppleLayout from '@/AppleLayout';
+import { Scene } from '@/types/layoutType';
 import '@/assets/global.scss';
 
 export default Vue.extend({
