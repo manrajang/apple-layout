@@ -53,3 +53,21 @@ export function ratioValue({ from, to, start, end }: Animation, sceneYOffset: nu
 
   return to;
 }
+
+export function drawCircle(el: HTMLCanvasElement, progress: number): void {
+  const ctx = el.getContext('2d');
+  if (!ctx) {
+    return;
+  }
+
+  const { width, height } = el;
+  ctx.beginPath();
+  const start = progress * progress * 3;
+  const end = 1 - (1 - progress) * (1 - progress) * 3;
+  ctx.arc(width / 2, height / 2, width * 0.02, (start - 0.5) * Math.PI, (end - 0.5) * Math.PI);
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'balck';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+  ctx.stroke();
+  ctx.fill();
+}

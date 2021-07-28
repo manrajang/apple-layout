@@ -50,4 +50,4 @@ export type Scene = {
   animationList?: AnimationInfo[];
 };
 export type LocalScene = Scene & { scrollHeight: number };
-export type ImageInfo = { selector: string; imageList: HTMLImageElement[] };
+export type ImageInfo = { selector: string; load: boolean; imageList: HTMLImageElement[] };
