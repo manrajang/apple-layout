@@ -2,10 +2,12 @@
   "name": "apple-layout",
   "version": "0.1.0",
   "private": true,
+  "main": "dist/appleLayout.common.js",
   "scripts": {
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build",
-    "lint": "vue-cli-service lint"
+    "lint": "vue-cli-service lint",
+    "bundle": "vue-cli-service build --target lib --name appleLayout ./src/layouts/AppleLayout.vue"
   },
   "dependencies": {
     "core-js": "^3.6.5",
@@ -28,5 +30,38 @@
     "sass-loader": "^8.0.2",
     "typescript": "~4.1.5",
     "vue-template-compiler": "^2.6.11"
-  }
+  },
+  "license": "MIT",
+  "files": [
+    "dist/appleLayout.umd.min.js",
+    "dist/appleLayout.common.js",
+    "README.md"
+  ],
+  "author": "manrajang <manrajang@gmail.com>",
+  "keywords": [
+    "vue",
+    "vue-apple-layout",
+    "vue apple layout",
+    "apple layout",
+    "apple animation",
+    "opacity",
+    "transform",
+    "blend",
+    "blend image",
+    "fade",
+    "fade image",
+    "animation",
+    "video",
+    "video image",
+    "apple"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manrajang/apple-layout.git"
+  },
+  "description": "### DEMO https://manrajang.github.io/apple-layout/",
+  "bugs": {
+    "url": "https://github.com/manrajang/apple-layout/issues"
+  },
+  "homepage": "https://github.com/manrajang/apple-layout#readme"
 }

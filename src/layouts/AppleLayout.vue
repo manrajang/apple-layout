@@ -25,6 +25,11 @@ export default Vue.extend({
       },
       deep: true,
     },
+    'appleLayout.currentYOffset': {
+      handler: function (): void {
+        this.$emit('scrollRatio', this.appleLayout ? this.appleLayout.scrollRatio : 0);
+      },
+    },
   },
   mounted(): void {
     this.appleLayout ??= new AppleLayout(this.$refs.layout as HTMLDivElement, this.sceneList as Scene[]);

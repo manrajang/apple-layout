@@ -7,15 +7,14 @@ import {
   LocalScene,
   ImageInfo,
 } from '@/types/layoutType';
-import { drawCircle, canvasFitRatio, showStickyElement, transformValue, ratioValue } from '@/utils/layoutUtil';
+import { canvasFitRatio, showStickyElement, transformValue, ratioValue } from '@/utils/layoutUtil';
 
 export default class AppleLayout {
   private accYOffset = 0;
-  private blendCanvasYPos = -1;
+  private blendCanvasTopPositionList: { selector: string; position: number }[] = [];
   private blendImageInfoList: ImageInfo[] = [];
   private currentScene = 0;
   private currentYOffset = 0;
-  private prevImageIndex = -1;
   private prevScene = 0;
   private rafId = -1;
   private sceneList: LocalScene[] = [];
@@ -60,6 +59,14 @@ export default class AppleLayout {
     return prevScrollHeight;
   }
 
+  get sceneYOffset(): number {
+    return this.currentYOffset - this.prevScrollHeight;
+  }
+
+  get scrollRatio(): number {
+    return (this.currentYOffset - this.prevScrollHeight) / this.sceneList[this.currentScene].scrollHeight;
+  }
+
   private handleScroll(): void {
     this.prevScene = this.currentScene;
     this.currentYOffset = window.pageYOffset;
@@ -76,9 +83,6 @@ export default class AppleLayout {
       } else {
         showStickyElement(this.sceneList, this.currentScene, false);
       }
-
-      this.blendCanvasYPos = -1;
-      this.prevImageIndex = -1;
     }
 
     if (this.currentYOffset < this.prevScrollHeight) {
@@ -87,8 +91,6 @@ export default class AppleLayout {
       }
 
       this.currentScene--;
-      this.blendCanvasYPos = -1;
-      this.prevImageIndex = -1;
       showStickyElement(this.sceneList, this.currentScene);
     }
 
@@ -131,19 +133,12 @@ export default class AppleLayout {
   }
 
   private handleBeforeUnload(): void {
-    if (this.currentYOffset > 0) {
-      scrollTo(0, this.prevScrollHeight + 5);
-    } else {
-      scrollTo(0, 0);
-    }
+    const pos = this.currentYOffset > 0 ? this.prevScrollHeight + 5 : 0;
+    scrollTo(0, pos);
+    localStorage.setItem('scrollpos', `${pos}`);
   }
 
-  private loadImagesInCurrentScene(
-    imageInfoList: ImageInfo[],
-    selector: string,
-    imagePathList: string[],
-    el: HTMLCanvasElement,
-  ): void {
+  private loadImagesInCurrentScene(imageInfoList: ImageInfo[], selector: string, imagePathList: string[]): void {
     const { length: imageCount } = imagePathList;
     if (imageCount === 0) {
       return;
@@ -154,24 +149,6 @@ export default class AppleLayout {
     });
     if (!findImageInfo) {
       let count = 0;
-      let progress = 0;
-      let rafLoadingId = -1;
-      const loading = () => {
-        el.getContext('2d')?.clearRect(0, 0, el.width, el.height);
-
-        progress += 0.02;
-        if (progress > 1) {
-          progress = 0;
-        }
-
-        drawCircle(el, progress);
-        rafLoadingId = requestAnimationFrame(loading);
-
-        if (count === imageCount) {
-          cancelAnimationFrame(rafLoadingId);
-          this.playAnimation();
-        }
-      };
       const imageInfo = {
         selector,
         load: false,
@@ -181,39 +158,36 @@ export default class AppleLayout {
           image.onload = () => {
             count++;
             imageInfo.load = count === imageCount;
+
+            if (count === imageCount) {
+              this.playAnimation();
+            }
           };
           return image;
         }),
       };
       imageInfoList.push(imageInfo);
-      loading();
     }
   }
 
   private loadImagesInRestScene(): void {
-    this.sceneList.forEach(({ selector, animationList }) => {
-      const sectionEl = document.querySelector<HTMLElement>(selector);
+    this.sceneList.forEach(({ animationList }) => {
       animationList?.forEach(({ selector, videoImage, blendImage }) => {
-        const el = sectionEl?.querySelector<HTMLCanvasElement>(selector);
-        if (!el) {
-          return;
-        }
-
         if (videoImage) {
-          this.loadImagesInCurrentScene(this.videoImageInfoList, selector, videoImage.imagePathList, el);
+          this.loadImagesInCurrentScene(this.videoImageInfoList, selector, videoImage.imagePathList);
         }
 
         if (blendImage) {
-          this.loadImagesInCurrentScene(this.blendImageInfoList, selector, blendImage.imagePathList, el);
+          this.loadImagesInCurrentScene(this.blendImageInfoList, selector, blendImage.imagePathList);
         }
       });
     });
   }
 
   public resetLayout(sceneList: Scene[]): void {
-    this.blendCanvasYPos = -1;
-    this.currentYOffset = window.pageYOffset;
-    this.prevImageIndex = -1;
+    const scrollPos = localStorage.getItem('scrollpos');
+    this.blendCanvasTopPositionList = [];
+    this.currentYOffset = scrollPos ? parseInt(scrollPos, 10) : window.pageYOffset;
     this.prevScene = 0;
     this.windowWidth = window.innerWidth;
     this.sceneList = sceneList.map(({ type, selector, heightMultiple, animationList }) => {
@@ -260,23 +234,26 @@ export default class AppleLayout {
         if (videoImage) {
           el.style.left = '50%';
           el.style.top = '50%';
-          el.style.transform = `translate3d(-50%, -50%, 0) scale(${window.innerHeight / videoImage.imageHeight})`;
+          el.style.transform = `translate3d(-50%, -50%, 0) scale(${window.innerHeight / el.height})`;
+        }
+
+        if (blendImage) {
+          this.blendCanvasTopPositionList.push({ selector, position: el.offsetTop });
         }
 
         if (index === this.currentScene) {
           if (videoImage) {
-            this.loadImagesInCurrentScene(this.videoImageInfoList, selector, videoImage.imagePathList, el);
+            this.loadImagesInCurrentScene(this.videoImageInfoList, selector, videoImage.imagePathList);
           }
 
           if (blendImage) {
-            this.loadImagesInCurrentScene(this.blendImageInfoList, selector, blendImage.imagePathList, el);
+            this.loadImagesInCurrentScene(this.blendImageInfoList, selector, blendImage.imagePathList);
           }
         }
       });
-
-      this.loadImagesInRestScene();
     });
 
+    this.loadImagesInRestScene();
     showStickyElement(this.sceneList, this.currentScene);
 
     if (this.currentYOffset === 0) {
@@ -307,8 +284,11 @@ export default class AppleLayout {
           const findImageInfo = this.blendImageInfoList.find(({ selector: _selector }) => {
             return _selector === selector;
           });
-          if (findImageInfo && findImageInfo.load) {
-            this.blendAnimation(blendImage, findImageInfo.imageList, el);
+          const findTopPosition = this.blendCanvasTopPositionList.find(({ selector: _selector }) => {
+            return _selector === selector;
+          });
+          if (findImageInfo && findImageInfo.load && findTopPosition) {
+            this.blendAnimation(blendImage, findImageInfo.imageList, el, findTopPosition.position);
           }
         }
       }
@@ -348,60 +328,111 @@ export default class AppleLayout {
   }
 
   private videoAnimation(animation: Animation, imageList: HTMLImageElement[], el: HTMLCanvasElement): void {
-    const imageIndex = Math.round(
-      ratioValue(animation, this.accYOffset - this.prevScrollHeight, this.sceneList[this.currentScene].scrollHeight),
-    );
-    const image = imageList[imageIndex];
-    if (image && image.complete) {
-      if (imageIndex !== this.prevImageIndex) {
-        el.getContext('2d')?.drawImage(image, 0, 0);
-      }
+    const image =
+      imageList[
+        Math.round(
+          ratioValue(
+            animation,
+            this.accYOffset - this.prevScrollHeight,
+            this.sceneList[this.currentScene].scrollHeight,
+          ),
+        )
+      ];
+    if (image) {
+      const { width: canvasWidth, height: canvasHeight } = el;
+      el.getContext('2d')?.drawImage(image, 0, 0, canvasWidth, canvasHeight);
     }
-
-    this.prevImageIndex = imageIndex;
   }
 
-  private preBlendAnimaiton(
+  private setBlendCanvasStyle(
+    { end: animationEndRatio, outAnimationType }: AnimationBlendImage,
+    el: HTMLCanvasElement,
+    canvasOffsetTop: number,
+  ): void {
+    if (el.parentElement) {
+      const { scrollHeight } = this.sceneList[this.currentScene];
+      const { offsetHeight: canvasOffsetHeight } = el;
+      const fitTop = (canvasOffsetHeight * canvasFitRatio(el) - canvasOffsetHeight) / 2;
+      el.style.top = `${fitTop}px`;
+      el.style.marginTop = '0';
+      el.parentElement.style.height = `${
+        scrollHeight * (animationEndRatio - canvasOffsetTop / scrollHeight) +
+        (outAnimationType === BlendAnimation.Scale ? 0 : fitTop)
+      }px`;
+    }
+  }
+
+  private blendInAnimaiton(
     { inAnimationType, inRatio }: AnimationBlendImage,
     el: HTMLCanvasElement,
     start: number,
     end: number,
   ): void {
-    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
     const { scrollHeight } = this.sceneList[this.currentScene];
-    const { width: canvasWidth, height: canvasHeight } = el;
+    const { offsetWidth: canvasOffsetWidth, width: canvasWidth, height: canvasHeight } = el;
     const fitRatio = canvasFitRatio(el);
+    el.classList.remove('blend-canvas-sticky');
 
     if (inAnimationType === BlendAnimation.CropSide) {
-      const fitWidth = document.body.offsetWidth / fitRatio;
+      const fitWidth =
+        canvasWidth - (canvasOffsetWidth - document.body.offsetWidth / fitRatio) * (canvasWidth / canvasOffsetWidth);
       const rectWidth = fitWidth * (inRatio || 0);
       const leftFrom = (canvasWidth - fitWidth) / 2;
       const rightFrom = leftFrom + fitWidth - rectWidth;
-      el.style.transformOrigin = 'top';
       el.style.transform = `translateX(-50%) scale(${fitRatio})`;
       el.getContext('2d')?.clearRect(
-        ratioValue({ from: leftFrom, to: leftFrom - rectWidth, start, end }, sceneYOffset, scrollHeight),
+        ratioValue({ from: leftFrom, to: leftFrom - rectWidth, start, end }, this.sceneYOffset, scrollHeight),
         0,
         rectWidth,
         canvasHeight,
       );
       el.getContext('2d')?.clearRect(
-        ratioValue({ from: rightFrom, to: rightFrom + rectWidth, start, end }, sceneYOffset, scrollHeight),
+        ratioValue({ from: rightFrom, to: rightFrom + rectWidth, start, end }, this.sceneYOffset, scrollHeight),
         0,
         rectWidth,
         canvasHeight,
       );
     } else if (inAnimationType === BlendAnimation.Scale) {
-      el.style.top = `-${(canvasHeight - canvasHeight * fitRatio) / 2}px`;
-      el.style.transformOrigin = 'center';
       el.style.transform = `translateX(-50%) scale(${ratioValue(
-        {
-          from: el.getBoundingClientRect().width / el.width,
-          to: fitRatio,
-          start,
-          end,
-        },
-        sceneYOffset,
+        { from: 1, to: fitRatio, start, end },
+        this.sceneYOffset,
+        scrollHeight,
+      )})`;
+    }
+  }
+
+  private blendOutAnimaiton(
+    { outAnimationType, outRatio }: AnimationBlendImage,
+    el: HTMLCanvasElement,
+    start: number,
+    end: number,
+  ): void {
+    const { scrollHeight } = this.sceneList[this.currentScene];
+    const { offsetWidth: canvasOffsetWidth, width: canvasWidth, height: canvasHeight } = el;
+    const fitRatio = canvasFitRatio(el);
+
+    if (outAnimationType === BlendAnimation.CropSide) {
+      const fitWidth =
+        canvasWidth - (canvasOffsetWidth - document.body.offsetWidth / fitRatio) * (canvasWidth / canvasOffsetWidth);
+      const rectWidth = fitWidth * (outRatio || 0);
+      const leftTo = (canvasWidth - fitWidth) / 2;
+      const rightTo = leftTo + fitWidth - rectWidth;
+      el.getContext('2d')?.clearRect(
+        ratioValue({ from: leftTo - rectWidth, to: leftTo, start, end }, this.sceneYOffset, scrollHeight),
+        0,
+        rectWidth,
+        canvasHeight,
+      );
+      el.getContext('2d')?.clearRect(
+        ratioValue({ from: rightTo + rectWidth, to: rightTo, start, end }, this.sceneYOffset, scrollHeight),
+        0,
+        rectWidth,
+        canvasHeight,
+      );
+    } else if (outAnimationType === BlendAnimation.Scale) {
+      el.style.transform = `translateX(-50%) scale(${ratioValue(
+        { from: fitRatio, to: 1, start, end },
+        this.sceneYOffset,
         scrollHeight,
       )})`;
     }
@@ -415,9 +446,6 @@ export default class AppleLayout {
 
     const { selector, animationList } = scene;
     const sectionEl = document.querySelector<HTMLElement>(selector);
-    if (!sectionEl) {
-      return;
-    }
 
     animationList?.forEach(({ selector, blendImage }) => {
       if (!blendImage) {
@@ -431,164 +459,149 @@ export default class AppleLayout {
         return;
       }
 
-      const el = sectionEl.querySelector<HTMLCanvasElement>(selector);
+      const findTopPosition = this.blendCanvasTopPositionList.find(({ selector: _selector }) => {
+        return _selector === selector;
+      });
+      if (!findTopPosition) {
+        return;
+      }
+
+      const el = sectionEl?.querySelector<HTMLCanvasElement>(selector);
       if (!el) {
         return;
       }
 
+      const { position: canvasOffsetTop } = findTopPosition;
+      const { width: canvasWidth, height: canvasHeight } = el;
       const { scrollHeight } = this.sceneList[this.currentScene];
-      const { offsetTop } = el;
-      el.getContext('2d')?.drawImage(findImageInfo.imageList[0], 0, 0);
+
+      el.getContext('2d')?.drawImage(findImageInfo.imageList[0], 0, 0, canvasWidth, canvasHeight);
+      this.setBlendCanvasStyle(blendImage, el, canvasOffsetTop);
 
       if (blendImage.inAnimationType) {
-        this.preBlendAnimaiton(
+        this.blendInAnimaiton(
           blendImage,
           el,
-          (scrollHeight + (offsetTop - window.innerHeight / 2)) / scrollHeight,
-          (scrollHeight + offsetTop) / scrollHeight,
+          (scrollHeight + (canvasOffsetTop - window.innerHeight / 2)) / scrollHeight,
+          (scrollHeight + canvasOffsetTop) / scrollHeight,
         );
+      } else {
+        el.style.transform = `translateX(-50%) scale(${canvasFitRatio(el)})`;
       }
     });
   }
 
-  private blendAnimation(animation: AnimationBlendImage, imageList: HTMLImageElement[], el: HTMLCanvasElement): void {
-    const { end: animationEnd, inAnimationType, outAnimationType, outRatio } = animation;
-    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
+  private blendAnimation(
+    animation: AnimationBlendImage,
+    imageList: HTMLImageElement[],
+    el: HTMLCanvasElement,
+    canvasOffsetTop: number,
+  ): void {
+    const { end: animationEndRatio, inAnimationType, outAnimationType } = animation;
     const { scrollHeight } = this.sceneList[this.currentScene];
-    const scrollRatio = sceneYOffset / scrollHeight;
-    const { offsetTop, width: canvasWidth, height: canvasHeight } = el;
+    const { offsetHeight: canvasOffsetHeight, width: canvasWidth, height: canvasHeight } = el;
     const fitRatio = canvasFitRatio(el);
-
-    if (this.blendCanvasYPos === -1) {
-      this.blendCanvasYPos = offsetTop;
-    }
-
-    const animationStart = this.blendCanvasYPos / scrollHeight;
-    const diff = animationEnd - animationStart;
-    const interval = outAnimationType ? diff / 2 : diff;
-    el.getContext('2d')?.drawImage(imageList[0], 0, 0);
+    const canvasRatio = ((canvasOffsetHeight * fitRatio - canvasOffsetHeight) / 2 + canvasOffsetHeight) / scrollHeight;
+    const animationStartRatio = canvasOffsetTop / scrollHeight;
+    const animationDiffRatio = animationEndRatio - animationStartRatio;
+    const intervalRatio = outAnimationType ? (animationDiffRatio - canvasRatio) / 2 : animationDiffRatio - canvasRatio;
+    el.getContext('2d')?.drawImage(imageList[0], 0, 0, canvasWidth, canvasHeight);
+    this.setBlendCanvasStyle(animation, el, canvasOffsetTop);
 
     if (inAnimationType) {
-      this.preBlendAnimaiton(
+      this.blendInAnimaiton(
         animation,
         el,
-        (this.blendCanvasYPos - window.innerHeight / 2) / scrollHeight,
-        animationStart,
+        (canvasOffsetTop - window.innerHeight / 2) / scrollHeight,
+        animationStartRatio,
       );
     } else {
-      el.style.transformOrigin = 'top';
       el.style.transform = `translateX(-50%) scale(${fitRatio})`;
     }
 
-    let nextAnimationStart = animationStart;
-    if (scrollRatio < nextAnimationStart) {
-      el.classList.remove('sticky');
+    let nextAnimationStartRatio = animationStartRatio;
+    if (this.scrollRatio < nextAnimationStartRatio) {
+      el.classList.remove('blend-canvas-sticky');
     } else {
-      const end = nextAnimationStart + interval;
+      const end = nextAnimationStartRatio + intervalRatio;
+      const image = imageList[1];
+      const { width: imageWidth, height: imageHeight } = image;
       const blendHeight = ratioValue(
-        { from: 0, to: canvasHeight, start: nextAnimationStart, end },
-        sceneYOffset,
+        { from: 0, to: imageHeight, start: nextAnimationStartRatio, end },
+        this.sceneYOffset,
         scrollHeight,
       );
-      el.classList.add('sticky');
-      el.style.top = '0';
-      el.style.marginTop = '0';
-      el.getContext('2d')?.drawImage(
-        imageList[1],
-        0,
-        canvasHeight - blendHeight,
-        canvasWidth,
-        blendHeight,
-        0,
-        canvasHeight - blendHeight,
-        canvasWidth,
-        blendHeight,
+      const blendDrawHeight = ratioValue(
+        { from: 0, to: canvasHeight, start: nextAnimationStartRatio, end },
+        this.sceneYOffset,
+        scrollHeight,
       );
-      nextAnimationStart = end;
+      el.classList.add('blend-canvas-sticky');
+      el.getContext('2d')?.drawImage(
+        image,
+        0,
+        imageHeight - blendHeight,
+        imageWidth,
+        blendHeight,
+        0,
+        canvasHeight - blendDrawHeight,
+        canvasWidth,
+        blendDrawHeight,
+      );
+
+      nextAnimationStartRatio = end;
     }
 
-    if (scrollRatio > nextAnimationStart && outAnimationType) {
-      const start = nextAnimationStart;
-      const end = nextAnimationStart + interval;
-
-      if (outAnimationType === BlendAnimation.CropSide) {
-        const fitWidth = document.body.offsetWidth / fitRatio;
-        const rectWidth = fitWidth * (outRatio || 0);
-        const leftTo = (canvasWidth - fitWidth) / 2;
-        const rightTo = leftTo + fitWidth - rectWidth;
-        el.getContext('2d')?.clearRect(
-          ratioValue({ from: leftTo - rectWidth, to: leftTo, start, end }, sceneYOffset, scrollHeight),
-          0,
-          rectWidth,
-          canvasHeight,
-        );
-        el.getContext('2d')?.clearRect(
-          ratioValue({ from: rightTo + rectWidth, to: rightTo, start, end }, sceneYOffset, scrollHeight),
-          0,
-          rectWidth,
-          canvasHeight,
-        );
-      } else if (outAnimationType === BlendAnimation.Scale) {
-        el.style.top = `-${(canvasHeight - canvasHeight * fitRatio) / 2}px`;
-        el.style.transformOrigin = 'center';
-        el.style.transform = `translateX(-50%) scale(${ratioValue(
-          { from: fitRatio, to: outRatio || 1, start, end },
-          sceneYOffset,
-          scrollHeight,
-        )})`;
-      }
-
-      el.style.marginTop = '0';
-      nextAnimationStart = end;
+    if (this.scrollRatio > nextAnimationStartRatio && outAnimationType) {
+      const end = nextAnimationStartRatio + intervalRatio;
+      this.blendOutAnimaiton(animation, el, nextAnimationStartRatio, end);
+      nextAnimationStartRatio = end;
     }
 
-    if (scrollRatio > nextAnimationStart && 0 < nextAnimationStart) {
-      el.classList.remove('sticky');
-      el.style.marginTop = `${scrollHeight * diff}px`;
+    if (this.scrollRatio > nextAnimationStartRatio && 0 < nextAnimationStartRatio) {
+      el.classList.remove('blend-canvas-sticky');
+      el.style.top = `0`;
+      el.style.marginTop = `${scrollHeight * animationDiffRatio - canvasOffsetHeight}px`;
     }
   }
 
   private opacityAnimation({ in: inAnimation, out: outAnimation }: AnimationInOut): string {
-    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
     const { scrollHeight } = this.sceneList[this.currentScene];
-    const scrollRatio = sceneYOffset / scrollHeight;
     const oneAnimation = inAnimation || outAnimation;
     if (inAnimation && outAnimation) {
-      if (scrollRatio <= (inAnimation.end + outAnimation.start) / 2) {
-        return `${ratioValue(inAnimation, sceneYOffset, scrollHeight)}`;
+      if (this.scrollRatio <= (inAnimation.end + outAnimation.start) / 2) {
+        return `${ratioValue(inAnimation, this.sceneYOffset, scrollHeight)}`;
       } else {
-        return `${ratioValue(outAnimation, sceneYOffset, scrollHeight)}`;
+        return `${ratioValue(outAnimation, this.sceneYOffset, scrollHeight)}`;
       }
     } else if (oneAnimation) {
-      return `${ratioValue(oneAnimation, sceneYOffset, scrollHeight)}`;
+      return `${ratioValue(oneAnimation, this.sceneYOffset, scrollHeight)}`;
     }
 
     return '';
   }
 
   private transformAnimation({ in: inAnimation, out: outAnimation }: AnimationInOut, animationType: string): string {
-    const sceneYOffset = this.currentYOffset - this.prevScrollHeight;
     const { scrollHeight } = this.sceneList[this.currentScene];
-    const scrollRatio = sceneYOffset / scrollHeight;
     const oneAnimation = inAnimation || outAnimation;
     if (inAnimation && outAnimation) {
-      if (scrollRatio <= (inAnimation.end + outAnimation.start) / 2) {
+      if (this.scrollRatio <= (inAnimation.end + outAnimation.start) / 2) {
         return `${transformValue(
           animationType,
-          ratioValue(inAnimation, sceneYOffset, scrollHeight),
+          ratioValue(inAnimation, this.sceneYOffset, scrollHeight),
           inAnimation.unit,
         )}`;
       } else {
         return `${transformValue(
           animationType,
-          ratioValue(outAnimation, sceneYOffset, scrollHeight),
+          ratioValue(outAnimation, this.sceneYOffset, scrollHeight),
           outAnimation.unit,
         )}`;
       }
     } else if (oneAnimation) {
       return `${transformValue(
         animationType,
-        ratioValue(oneAnimation, sceneYOffset, scrollHeight),
+        ratioValue(oneAnimation, this.sceneYOffset, scrollHeight),
         oneAnimation.unit,
       )}`;
     }
