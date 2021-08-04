@@ -122,6 +122,7 @@ export default class AppleLayout {
     if (this.windowWidth !== window.innerWidth) {
       scrollTo(0, 0);
       window.addEventListener('scroll', this.handleScrollTop, { once: true });
+      this.resetLayout(this.sceneList);
     }
   }
 
